@@ -12,6 +12,7 @@ mod print;
 mod prompt;
 mod reader;
 mod server_params;
+mod statement;
 
 
 fn main() -> Result<(), anyhow::Error> {
