@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::str;
 use std::mem::replace;
 
-use anyhow;
+use anyhow::{self, Context};
 use async_std::io::stdin;
 use async_std::io::prelude::WriteExt;
 use async_std::net::{TcpStream, ToSocketAddrs};
@@ -19,12 +19,16 @@ use edgedb_protocol::client_message::{DescribeStatement, DescribeAspect};
 use edgedb_protocol::client_message::{Execute, ExecuteScript};
 use edgedb_protocol::server_message::{ServerMessage, Authentication};
 use edgedb_protocol::queryable::{Queryable};
+use edgedb_protocol::value::{Value};
 use crate::reader::{Reader, ReadError, QueryableDecoder, QueryResponse};
+use crate::reader::{Decode};
 use crate::options::Options;
 use crate::print::print_to_stdout;
 use crate::prompt;
 use crate::commands::backslash;
 use crate::server_params::PostgresAddress;
+use crate::statement::{ReadStatement, EndOfFile};
+
 
 pub struct Connection {
     stream: TcpStream,
@@ -453,8 +457,22 @@ pub async fn non_interactive_main(options: Options)
     -> Result<(), anyhow::Error>
 {
     let mut conn = Connection::from_options(&options).await?;
-    let _cli = conn.authenticate(&options).await?;
+    let cli = conn.authenticate(&options).await?;
     let stdin_obj = stdin();
-    let _stdin = stdin_obj.lock(); // only lock *after* authentication
-    todo!();
+    let mut stdin = stdin_obj.lock().await; // only lock *after* authentication
+    let mut inbuf = BytesMut::with_capacity(8192);
+    loop {
+        let stmt = match ReadStatement::new(&mut inbuf, &mut stdin).await {
+            Ok(chunk) => chunk,
+            Err(e) if e.is::<EndOfFile>() => break,
+            Err(e) => return Err(e),
+        };
+        let stmt = str::from_utf8(&stmt[..])
+            .context("can't decode statement")?;
+        let items = cli.query::<Value>(stmt).await?;
+        while let Some(row) = items.next().await.transpose()? {
+            println!("ROW {:?}", row);
+        }
+    }
+    Ok(())
 }
