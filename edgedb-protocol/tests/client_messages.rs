@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 
 use bytes::{Bytes, BytesMut};
+use uuid::Uuid;
 
 use edgedb_protocol::client_message::{ClientMessage, ClientHandshake};
 use edgedb_protocol::client_message::{ExecuteScript, Execute};
@@ -9,6 +10,7 @@ use edgedb_protocol::client_message::{Prepare, IoFormat, Cardinality};
 use edgedb_protocol::client_message::{DescribeStatement, DescribeAspect};
 use edgedb_protocol::client_message::{SaslInitialResponse};
 use edgedb_protocol::client_message::{SaslResponse};
+use edgedb_protocol::client_message::{OptimisticExecute};
 
 mod base;
 
@@ -120,5 +122,20 @@ fn authentication() -> Result<(), Box<dyn Error>> {
                  b"YsykYKRbp/Gli53UEElsGb4I,"
                  b"p=UNQQkuQ0m5RRy24Ovzj/"
                  b"sCevUB36WTDbGXIWbCIsJmo="));
+    Ok(())
+}
+
+#[test]
+fn optimistic_execute() -> Result<(), Box<dyn Error>> {
+    encoding_eq!(ClientMessage::OptimisticExecute(OptimisticExecute {
+        headers: HashMap::new(),
+        io_format: IoFormat::Json,
+        expected_cardinality: Cardinality::One,
+        command_text: String::from("SELECT 1+1"),
+        input_typedesc_id: Uuid::from_u128(0),
+        output_typedesc_id: Uuid::from_u128(101),
+        arguments: Bytes::from_static(b""),
+    }), bconcat!(b"O\0\0\0:\0\0jo\0\0\0\nSELECT 1+1\0\0\0\0\0\0\0\0"
+                 b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0e\0\0\0\0"));
     Ok(())
 }

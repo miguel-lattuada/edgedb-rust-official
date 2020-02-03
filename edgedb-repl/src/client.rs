@@ -4,22 +4,25 @@ use std::str;
 use std::mem::replace;
 
 use anyhow;
-use async_std::io::stdin;
 use async_std::io::prelude::WriteExt;
+use async_std::io::stdin;
 use async_std::net::{TcpStream, ToSocketAddrs};
 use async_std::sync::{Sender, Receiver};
 use bytes::{Bytes, BytesMut, BufMut};
 use scram::ScramClient;
 use serde_json::from_slice;
 use typemap::TypeMap;
+use uuid::Uuid;
 
 use edgedb_protocol::client_message::{ClientMessage, ClientHandshake};
 use edgedb_protocol::client_message::{Prepare, IoFormat, Cardinality};
 use edgedb_protocol::client_message::{DescribeStatement, DescribeAspect};
 use edgedb_protocol::client_message::{Execute, ExecuteScript};
+use edgedb_protocol::client_message::{OptimisticExecute};
 use edgedb_protocol::server_message::{ServerMessage, Authentication};
 use edgedb_protocol::queryable::{Queryable};
 use crate::reader::{Reader, ReadError, QueryableDecoder, QueryResponse};
+use crate::reader::{JsonDecoder};
 use crate::options::Options;
 use crate::print::print_to_stdout;
 use crate::prompt;
@@ -183,7 +186,7 @@ pub async fn interactive_main(options: Options, data: Receiver<prompt::Input>,
 
         cli.send_message(&ClientMessage::Prepare(Prepare {
             headers: HashMap::new(),
-            io_format: IoFormat::Binary,
+            io_format: IoFormat::JsonRows,
             expected_cardinality: Cardinality::Many,
             statement_name: statement_name.clone(),
             command_text: String::from(inp),
@@ -369,6 +372,26 @@ impl<'a> Client<'a> {
             }
         };
         Ok(status)
+    }
+
+    pub async fn query_json(&mut self, request: &str)
+        -> Result<
+            QueryResponse<'_, &'a TcpStream, JsonDecoder>,
+            anyhow::Error
+        >
+    {
+        self.send_message(&ClientMessage::OptimisticExecute(OptimisticExecute {
+            headers: HashMap::new(),
+            io_format: IoFormat::Json,
+            expected_cardinality: Cardinality::One,
+            command_text: String::from("SELECT 1+1"),
+            input_typedesc_id: Uuid::from_u128(0),
+            output_typedesc_id: Uuid::from_u128(101),
+            arguments: Bytes::from_static(b""),
+        })).await?;
+        self.send_message(&ClientMessage::Sync).await?;
+
+        return Ok(self.reader.response(JsonDecoder));
     }
 
     pub async fn query<R>(&mut self, request: &str)

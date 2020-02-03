@@ -54,6 +54,10 @@ pub enum DecodeError {
     TooManyDescriptors { backtrace: Backtrace, index: usize },
     #[snafu(display("uuid {} not found", uuid))]
     UuidNotFound { backtrace: Backtrace, uuid: uuid::Uuid },
+
+    #[snafu(display("error decoding type: {}", error))]
+    // TODO(tailhook) figure out valid error `source`
+    Decode { backtrace: Backtrace, error: String },
 }
 
 #[derive(Snafu, Debug)]

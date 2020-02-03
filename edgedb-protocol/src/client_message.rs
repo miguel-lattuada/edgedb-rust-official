@@ -4,6 +4,7 @@ use std::io::Cursor;
 use std::u16;
 
 use bytes::{Bytes, BytesMut, BufMut, Buf};
+use uuid::Uuid;
 use snafu::{OptionExt, ensure};
 
 use crate::encoding::{Encode, Decode, Headers, encode};
@@ -19,6 +20,7 @@ pub enum ClientMessage {
     Prepare(Prepare),
     DescribeStatement(DescribeStatement),
     Execute(Execute),
+    OptimisticExecute(OptimisticExecute),
     UnknownMessage(u8, Bytes),
     AuthenticationSaslInitialResponse(SaslInitialResponse),
     AuthenticationSaslResponse(SaslResponse),
@@ -75,6 +77,17 @@ pub struct Execute {
     pub arguments: Bytes,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptimisticExecute {
+    pub headers: Headers,
+    pub io_format: IoFormat,
+    pub expected_cardinality: Cardinality,
+    pub command_text: String,
+    pub input_typedesc_id: Uuid,
+    pub output_typedesc_id: Uuid,
+    pub arguments: Bytes,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DescribeAspect {
     DataDescription = 0x54,
@@ -84,6 +97,7 @@ pub enum DescribeAspect {
 pub enum IoFormat {
     Binary = 0x62,
     Json = 0x6a,
+    JsonRows = 0x4a,
 }
 
 
@@ -99,6 +113,7 @@ impl ClientMessage {
             Prepare(h) => encode(buf, 0x50, h),
             DescribeStatement(h) => encode(buf, 0x44, h),
             Execute(h) => encode(buf, 0x45, h),
+            OptimisticExecute(h) => encode(buf, 0x4f, h),
             Sync => encode(buf, 0x53, &Empty),
             Flush => encode(buf, 0x48, &Empty),
             Terminate => encode(buf, 0x58, &Empty),
@@ -125,6 +140,8 @@ impl ClientMessage {
             0x51 => ExecuteScript::decode(&mut data).map(M::ExecuteScript),
             0x50 => Prepare::decode(&mut data).map(M::Prepare),
             0x45 => Execute::decode(&mut data).map(M::Execute),
+            0x4f => OptimisticExecute::decode(&mut data)
+                .map(M::OptimisticExecute),
             0x53 => Ok(M::Sync),
             0x48 => Ok(M::Flush),
             0x58 => Ok(M::Terminate),
@@ -303,6 +320,7 @@ impl Decode for Prepare {
         let io_format = match buf.get_u8() {
             0x62 => IoFormat::Binary,
             0x6a => IoFormat::Json,
+            0x4a => IoFormat::JsonRows,
             c => errors::InvalidIoFormat { io_format: c }.fail()?,
         };
         let expected_cardinality = match buf.get_u8() {
@@ -318,6 +336,65 @@ impl Decode for Prepare {
             expected_cardinality,
             statement_name,
             command_text,
+        })
+    }
+}
+
+impl Encode for OptimisticExecute {
+    fn encode(&self, buf: &mut BytesMut)
+        -> Result<(), EncodeError>
+    {
+        buf.reserve(44);
+        buf.put_u16(u16::try_from(self.headers.len()).ok()
+            .context(errors::TooManyHeaders)?);
+        for (&name, value) in &self.headers {
+            buf.reserve(2);
+            buf.put_u16(name);
+            value.encode(buf)?;
+        }
+        buf.reserve(42);
+        buf.put_u8(self.io_format as u8);
+        buf.put_u8(self.expected_cardinality as u8);
+        self.command_text.encode(buf)?;
+        self.input_typedesc_id.encode(buf)?;
+        self.output_typedesc_id.encode(buf)?;
+        self.arguments.encode(buf)?;
+        Ok(())
+    }
+}
+
+impl Decode for OptimisticExecute {
+    fn decode(buf: &mut Cursor<Bytes>) -> Result<Self, DecodeError> {
+        ensure!(buf.remaining() >= 44, errors::Underflow);
+        let num_headers = buf.get_u16();
+        let mut headers = HashMap::new();
+        for _ in 0..num_headers {
+            ensure!(buf.remaining() >= 4, errors::Underflow);
+            headers.insert(buf.get_u16(), Bytes::decode(buf)?);
+        }
+        ensure!(buf.remaining() >= 42, errors::Underflow);
+        let io_format = match buf.get_u8() {
+            0x62 => IoFormat::Binary,
+            0x6a => IoFormat::Json,
+            c => errors::InvalidIoFormat { io_format: c }.fail()?,
+        };
+        let expected_cardinality = match buf.get_u8() {
+            0x6f => Cardinality::One,
+            0x6d => Cardinality::Many,
+            c => errors::InvalidCardinality { cardinality: c }.fail()?,
+        };
+        let command_text = String::decode(buf)?;
+        let input_typedesc_id = Uuid::decode(buf)?;
+        let output_typedesc_id = Uuid::decode(buf)?;
+        let arguments = Bytes::decode(buf)?;
+        Ok(OptimisticExecute {
+            headers,
+            io_format,
+            expected_cardinality,
+            command_text,
+            input_typedesc_id,
+            output_typedesc_id,
+            arguments,
         })
     }
 }

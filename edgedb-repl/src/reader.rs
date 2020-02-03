@@ -14,7 +14,7 @@ use bytes::{Bytes, BytesMut, BufMut};
 use snafu::{Snafu, ResultExt, Backtrace};
 
 use edgedb_protocol::server_message::{ServerMessage};
-use edgedb_protocol::errors::{DecodeError};
+use edgedb_protocol::errors::{DecodeError, Decode as WrapDecode };
 use edgedb_protocol::queryable::Queryable;
 use edgedb_protocol::codec::Codec;
 use edgedb_protocol::value::Value;
@@ -59,6 +59,8 @@ pub trait Decode {
 }
 
 pub struct QueryableDecoder<T>(PhantomData<*const T>);
+pub struct JsonDecoder;
+
 
 unsafe impl<T> Send for QueryableDecoder<T> {}
 
@@ -72,6 +74,14 @@ impl<T: Queryable> Decode for QueryableDecoder<T> {
     type Output = T;
     fn decode(&self, msg: Bytes) -> Result<T, DecodeError> {
         Queryable::decode(&mut io::Cursor::new(msg))
+    }
+}
+
+impl Decode for JsonDecoder {
+    type Output = serde_json::Value;
+    fn decode(&self, msg: Bytes) -> Result<serde_json::Value, DecodeError> {
+        serde_json::from_str(&String::decode(&mut io::Cursor::new(msg))?)
+            .or_else(|e| WrapDecode { error: e.to_string() }.fail())
     }
 }
 
